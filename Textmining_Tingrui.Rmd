@@ -1,0 +1,144 @@
+---
+title: "TextMining Tingrui Huang"
+author: "Tingrui Huang"
+date: "November 4, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Step 1. Load text file into R
+# "Data Science is not just about Data Science" - ds
+```{r }
+library(rvest)
+library(stringr)
+datascience <- "https://correlaid.org/blog/posts/data-science-books-to-read"
+content <- read_html(datascience)
+ds <- html_nodes(content,"div.post-content") %>% html_text
+ds_2 <- str_trim(ds,side = "both")
+ds_3 <- as.tibble(ds_2)
+colnames(ds_3) <- "text" 
+ds_3[,"text"]<-gsub("\n","",ds_3[,"text"])
+```
+
+### Step 2. Clean data
+```{r }
+library(tidyverse)
+library(tidytext)
+#One token per row
+ds_tidy <- ds_3 %>% unnest_tokens(word, text)
+# Remove stop words
+data(stop_words)
+ds_tidy <- ds_tidy %>% anti_join(stop_words)
+```
+
+### Step 3. EDA
+```{r }
+# Most common words in the blog
+ds_tidy %>% count(word, sort = TRUE)
+# Visualize the common words in the blog
+ds_tidy %>% count(word, sort = TRUE) %>% filter(n > 4) %>% ggplot(aes(word,n)) + geom_col()
+# Wordcloud
+library(wordcloud)
+library(RColorBrewer)
+ds_tidy %>% count(word, sort = TRUE) %>% with(wordcloud(word,n))
+```
+
+### Step 4. Sentiment Analysis
+```{r }
+# Using "afinn"
+ds_affin <- ds_tidy %>% inner_join(get_sentiments("afinn")) %>% summarise(sentiment = sum(score))
+# Using "nrc"
+ds_nrc <- ds_tidy %>% inner_join(get_sentiments("nrc")) %>% count(word, sentiment)
+ggplot(ds_nrc) + aes(sentiment, n) + geom_bar(aes(fill=sentiment), stat = "identity") +
+  theme(text = element_text(size=14), axis.text.x = element_text(angle = 45, vjust = 0.5)) +
+  ylab("count") + ggtitle("Total Sentiment Scores in DS")
+# Using "bing"
+ds_bing <- ds_tidy %>% inner_join(get_sentiments("bing")) %>% count(word, sentiment, sort = TRUE)
+ds_bing_group <- ds_bing %>% group_by(sentiment) %>% top_n(5) %>% ungroup() %>% mutate(word=reorder(word, n))
+ggplot(ds_bing_group, aes(word, n, fill=sentiment)) + geom_col() + facet_wrap(~sentiment, scales = "free_y") + 
+  ggtitle("Total Sentiment score by using Bing")  +coord_flip()
+```
+
+### Step 5. Term Frequency and Inverse Document Frequency
+```{r }
+# Total words
+tt_words <- ds_tidy %>% count(word, sort = TRUE) %>% summarise(total=sum(n))
+ds_words <- ds_tidy %>% count(word, sort = TRUE) %>% mutate(total = rep(543, 352))
+# Term Frequency
+ggplot(ds_words) + aes(n/total) + geom_histogram(bins = 10)
+# Term Frequency and Rank
+freq_by_rank <- ds_words %>% mutate(rank=row_number(), frequency=n/total)
+ggplot(freq_by_rank) + aes(rank, frequency) + geom_line(size=1.1, alpha=0.8) + scale_x_log10() + scale_y_log10() + 
+  geom_abline(intercept = -1.2, slope = -0.7)
+# TF-IDF
+ds_tf_idf <- ds_words %>% bind_tf_idf(word,n,total) %>% arrange(desc(tf_idf))
+# Visualization
+ds_tf_idf %>% top_n(15) %>% mutate(word = reorder(word, tf_idf)) %>% ggplot() + aes(word, tf_idf) + geom_col() + coord_flip()
+```
+
+### Step 6. n-grams and correlations
+```{r }
+# Tokenizing by 2 grams
+ds_bigrams <- ds_3 %>% unnest_tokens(bigram, text, token = "ngrams", n=2)
+# Summarize
+sum_count <- ds_bigrams %>% count(bigram, sort = TRUE)
+# Remove stop words
+ds_bigrams_tidy <- ds_bigrams %>% separate(bigram, c("word1","word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite(bigram, word1, word2, sep = " ")
+# tf-idf totao=181
+ds_bigram_tf_idf <- ds_bigrams_tidy %>% mutate(total = rep(181, 162)) %>% bind_tf_idf(bigram,n,total)
+# Visualization
+ds_bigram_tf_idf %>% top_n(10) %>% mutate(bigram = reorder(bigram, tf_idf)) %>% 
+  ggplot() + aes(bigram, tf_idf) + geom_col() + coord_flip()
+# Visualizing a network of bigrams
+library(igraph)
+bigram_count <- ds_bigrams_tidy <- ds_bigrams %>% separate(bigram, c("word1","word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  count(word1, word2, sort = TRUE)
+bigram_graph <- bigram_count %>% graph_from_data_frame()
+library(ggraph)
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+ggraph(bigram_graph,layout = "fr") + 
+  geom_edge_link(aes(edge_alpha=n), arrow = a, end_cap=circle(.07, "inches")) + 
+  geom_node_point(color = "lightblue", size = 5) + 
+  geom_node_text(aes(label=name),vjust=1,hjust=1) +
+  theme_void()
+# correlation and pairs
+library(widyr)
+word_pairs <- ds_3 %>% mutate(section=row_number() %/% 10) %>% unnest_tokens(word, text) %>%
+  filter(!word %in% stop_words$word) %>% pairwise_count(word, section, sort=TRUE)
+word_cors <- ds_3 %>% mutate(section=row_number()) %>% unnest_tokens(word, text) %>%
+  filter(!word %in% stop_words$word) %>% group_by(word) %>% 
+  pairwise_cor(word,section, sort = TRUE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
