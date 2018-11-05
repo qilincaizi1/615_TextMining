@@ -1,0 +1,236 @@
+---
+title: "615 for text mining"
+author: "Qixuan Zhang"
+date: "11/4/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+# Read text file
+library(tidytext)
+library(readr)
+library(tidytext)
+library(tidyverse)
+library(tidyr)
+library(scales)
+library(wordcloud)
+library(reshape2)
+library(igraph)
+library(ggraph)
+library(rvest)
+url1 <- "https://correlaid.org/blog/posts/understand-p-values"
+content <- read_html(url1)
+html1<- html_nodes(content,"div.post-content") %>% html_text
+text <- str_trim(html1,side = "both")
+text1 <- as.tibble(text)
+colnames(text1) <- "text" 
+text1[,"text"]<-gsub("\n","",text1[,"text"])
+
+```
+ 
+##Chapter1 The tidy text format
+```{r}
+#unnest_token function
+text1_1<-text1 %>%
+  unnest_tokens(word, text)
+
+data(stop_words)
+text1_11<- text1_1 %>%
+  anti_join(stop_words,by="word")
+# Plot the tidy blog
+#plot the frenquecy of blog1
+text1_11%>% count(word,sort=TRUE) %>%
+  filter(n >4) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip()
+# Compare the frenquency of blog1 and blog2
+
+ 
+```
+##Chapter2 Sentiments words
+```{r}
+# Sentiments analysis of afinn, bing,nrc
+library(tidytext)
+sentiments
+afinn <- get_sentiments("afinn")
+bing <- get_sentiments("bing")
+nrc <- get_sentiments("nrc")
+
+afinn_analysis <- text1_11 %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(word) %>%
+  summarize(occurences = n(),
+            afinn_analysis = sum(score))
+#ggplotafinn_analysis
+afinn_analysis %>%
+  top_n(25, abs(afinn_analysis)) %>%
+  mutate(word = reorder(word, afinn_analysis)) %>%
+  ggplot(aes(word, afinn_analysis, fill = afinn_analysis > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip()
+
+sentitext <-  text1_11 %>%
+  unnest_tokens(sentence, text, token = "sentences") %>% 
+  group_by(word) %>%
+  mutate(linenumber = row_number()) %>%
+  ungroup() %>%
+  unnest_tokens(word, sentence) %>%
+  anti_join(stop_words, by = "word")
+#Caculate the sentiment word for p-value article
+bing_analysis <- sentitext %>%
+  inner_join(bing, by = "word") %>%
+  count(word, index = linenumber , sentiment)%>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+  ggplot(bing_analysis,aes(x=word,y=index,fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Sentiment",
+       x = NULL) +
+  coord_flip()
+# Compare
+
+  
+  
+  
+# Wordcloud
+library(wordcloud)
+text1_1 %>%
+  anti_join(stop_words,by="word") %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 100))
+
+
+```
+##Chapter3 
+```{r}
+#Total word frequency calculate and plot
+total_words<-text1_11 %>% summarize(total=n())
+book_word <- text1_11 %>%
+  count(word, sort = TRUE) %>% mutate(total=rep(908,301))
+ggplot(book_word) + aes(n/total) + geom_histogram(bins = 10)
+#Frequecy and rank of p-value
+freq_by_rank <- book_word %>% mutate(rank=row_number(), frequency=n/total)
+ggplot(freq_by_rank) + aes(rank, frequency) + geom_line(size=1.1, alpha=0.8,color="red") + scale_x_log10() + scale_y_log10() + 
+  geom_abline(intercept = -1.2, slope = -0.7)
+# TF-IDF
+ds_tf_idf <- book_word %>% bind_tf_idf(word,n,total) %>% arrange(desc(tf_idf))
+# Visualization
+ds_tf_idf %>% top_n(15) %>% mutate(word = reorder(word, tf_idf)) %>% ggplot() + aes(word, tf_idf) + geom_col() + coord_flip()
+#Compute the rank coefficient
+rank_subset <- freq_by_rank %>% 
+  filter(rank < 100,
+         rank > 10)
+rankreg <- lm(log10(`frequency`) ~ log10(rank), data = rank_subset)
+rankreg$coef
+
+```
+# Chapter4
+```{r}
+# P-value tokenizing by 2 grams
+p_value <- text1_11 %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+#4.1.1 Counting,filtering n-grams and remove stopwords
+sum_count<-p_value %>%
+  count(bigram, sort = TRUE)
+bigrams_separated <- p_value %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+p_value_bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+   count(word1, word2, sort = TRUE) %>%
+  unite(bigram, word1, word2, sep = " ")
+
+
+# Tokenizing by 2 grams
+ds_bigrams <- ds_3 %>% unnest_tokens(bigram, text, token = "ngrams", n=2)
+# Summarize
+sum_count <- ds_bigrams %>% count(bigram, sort = TRUE)
+# Remove stop words
+ds_bigrams_tidy <- ds_bigrams %>% separate(bigram, c("word1","word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite(bigram, word1, word2, sep = " ")
+# tf-idf totao=908
+ds_bigram_tf_idf <- p_value_bigrams_filtered %>% mutate(total = rep(908, 164)) %>% bind_tf_idf(bigram,n,total)
+# Visualization
+ds_bigram_tf_idf %>% top_n(10) %>% mutate(bigram = reorder(bigram, tf_idf)) %>% 
+  ggplot() + aes(bigram, tf_idf) + geom_col() + coord_flip()
+
+
+
+# Visualizing a network of bigrams
+library(igraph)
+bigram_count <- p_value_bigrams_filtered  %>% separate(bigram, c("word1","word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  count(word1, word2, sort = TRUE)
+bigram_graph <- bigram_count %>% graph_from_data_frame()
+
+#Simple
+library(ggraph)
+set.seed(2017)
+ggraph(bigram_graph, layout = "fr") +
+geom_edge_link() +
+geom_node_point() +
+geom_node_text(aes(label = name), vjust = 1, hjust = 1)
+
+
+
+
+
+
+library(ggraph)
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+b<-ggraph(bigram_graph,layout = "fr") + 
+  geom_edge_link(aes(), arrow = a, end_cap=circle(.07, "inches")) + 
+  geom_node_point(color = "lightblue", size = 5) + 
+  geom_node_text(aes(label=name),vjust=1,hjust=1) +
+  theme_void()
+# correlation and pairs
+library(widyr)
+word_pairs <- text1_1 %>% mutate(section=row_number() %/% 10) %>% unnest_tokens(word, text) %>%
+  filter(!word %in% stop_words$word) %>% pairwise_count(word, section, sort=TRUE)
+word_cors <- ds_3 %>% mutate(section=row_number()) %>% unnest_tokens(word, text) %>%
+  filter(!word %in% stop_words$word) %>% group_by(word) %>% 
+  pairwise_cor(word,section, sort = TRUE)
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
